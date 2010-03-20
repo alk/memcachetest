@@ -19,7 +19,7 @@
  */
 
 /*
- * Portions Copyright 2009 Matt Ingenthron
+ * Portions Copyright 2009-2010 Matt Ingenthron
  */
 #include "config.h"
 
@@ -51,7 +51,7 @@
 #include "vbucket.h"
 
 #ifndef MAXINT
-/* I couldn't find MAXINT on my MacOSX box.. I should update this... */
+/* MAXINT doesn't seem to exist on MacOS */
 #define MAXINT (int)(unsigned int)-1
 #endif
 
@@ -61,31 +61,6 @@ struct host {
     struct host *next;
 } *hosts = NULL;
 
-/**
- * A struct holding the information I would like to measure for each test-run
- */
-struct report {
-    /** The index in the items array to start at */
-    int offset;
-    /** The number of operations to execute */
-    size_t total;
-    /** The number of set-operation executed */
-    size_t set;
-    /** The total time of all of the set-operations */
-    hrtime_t setDelta;
-    /** The number of get-operations executed */
-    size_t get;
-    /** The total time of all of the get-operations */
-    hrtime_t getDelta;
-    /** The best set operation */
-    hrtime_t bestSet;
-    /** The best get operation */
-    hrtime_t bestGet;
-    /** The worst set operation */
-    hrtime_t worstSet;
-    /** The worst get operation */
-    hrtime_t worstGet;
-};
 
 /**
  * The set of data to operate on
@@ -400,7 +375,6 @@ static struct connection *get_connection(void) {
 #ifdef __sun
         return &connectionpool[pthread_self()];
 #else
-        /* @FIXME!!!! */
         return &connectionpool[0];
 #endif
     } else {
@@ -505,7 +479,8 @@ static int initialize_dataset(void) {
  * Populate the dataset to the server
  * @return 0 if success, -1 if an error occurs
  */
-static int populate_dataset(struct report *rep) {
+static int populate_dataset(struct thread_context *ctx) {
+    struct report *rep = &ctx->thr_summary;
     struct connection* connection = get_connection();
     int end = rep->offset + rep->total;
     char key[12];
@@ -532,7 +507,7 @@ static int populate_dataset(struct report *rep) {
  * @return arg
  */
 static void *populate_thread_main(void* arg) {
-    if (populate_dataset((struct report*) arg) == 0) {
+    if (populate_dataset((struct thread_context*) arg == 0) {
         return arg;
     } else {
         return NULL;
@@ -548,30 +523,30 @@ static int populate_data(int no_threads) {
     int ret = 0;
     if (no_threads > 1) {
         pthread_t *threads = calloc(sizeof (pthread_t), no_threads);
-        struct report *reports = calloc(sizeof (struct report), no_threads);
+        struct thread_context *ctx = calloc(sizeof(struct thread_context), no_threads);
         int perThread = no_items / no_threads;
         int rest = no_items % no_threads;
         size_t offset = 0;
         int ii;
 
-        if (threads == NULL || reports == NULL) {
+        if (threads == NULL || ctx == NULL) {
             fprintf(stderr, "Failed to allocate memory\n");
             free(threads);
-            free(reports);
+            free(ctx);
             return -1;
         }
 
         for (ii = 0; ii < no_threads; ++ii) {
-            reports[ii].offset = offset;
-            reports[ii].total = perThread;
+            ctx->thr_summary.offset = offset;
+            ctx->thr_summary.total = perThread;
             offset += perThread;
             if (rest > 0) {
                 --rest;
-                ++reports[ii].total;
+                ++ctx->thr_summary.total;
                 ++offset;
             }
             pthread_create(&threads[ii], 0, populate_thread_main,
-                           &reports[ii]);
+                    &ctx[ii]);
         }
 
         for (ii = 0; ii < no_threads; ++ii) {
@@ -582,12 +557,13 @@ static int populate_data(int no_threads) {
             }
         }
         free(threads);
-        free(reports);
+        free(ctx);
     } else {
-        struct report report;
-        report.offset = 0;
-        report.total = no_items;
-        ret = populate_dataset(&report);
+        struct thread_context ctx = {.thr_summary.offset=0, .thr_summary.total=no_items};
+
+        if (populate_dataset(&ctx) == -1) {
+            return 1;
+        }
     }
 
     return ret;
@@ -599,18 +575,21 @@ static int get_setval(void) {
 }
 
 /**
- * Test the library (perform a number of operations on the server).
+ * Test the server and library
  * @param rep Where to store the result of the test
  * @return 0 on success, -1 otherwise
  */
-static int test(struct report *rep) {
+static int test(struct thread_context *ctx) {
     int ret = 0;
     struct connection* connection;
-    rep->bestGet = rep->bestSet = 99999999;
-    rep->worstGet = rep->worstSet = 0;
-
+    ctx->thr_summary.bestGet = ctx->thr_summary.worstGet = 99999999;
+    ctx->thr_summary.worstGet = ctx->thr_summary.worstSet = 0;
     char key[12];
     size_t nkey;
+    for (int ii = 0; ii < ctx->thr_summary.total; ++ii) {
+        connection = get_connection();
+
+        struct item item = get_setval();
 
     for (size_t ii = 0; ii < rep->total; ++ii) {
         connection = get_connection();
@@ -623,15 +602,15 @@ static int test(struct report *rep) {
             memcached_set_wrapper(connection, key, nkey,
                                   datablock.data, dataset[idx]);
             delta = gethrtime() - start;
-            if (delta < rep->bestSet) {
-                rep->bestSet = delta;
+            if (delta < ctx->thr_summary.bestSet) {
+                ctx->thr_summary.bestSet = delta;
             }
-            if (delta > rep->worstSet) {
-                rep->worstSet = delta;
+            if (delta > ctx->thr_summary.worstSet) {
+                ctx->thr_summary.worstSet = delta;
             }
-            rep->setDelta += delta;
+            ctx->thr_summary.setDelta += delta;
             // record_tx(TX_SET, delta);  Need to add sets!
-            ++rep->set;
+            ++ctx->thr_summary.set;
         } else {
             /* go set it from random data */
             if (verbose) {
@@ -643,13 +622,13 @@ static int test(struct report *rep) {
             void *data = memcached_get_wrapper(connection, key, nkey, &size);
 
             delta = gethrtime() - start;
-            if (delta < rep->bestGet) {
-                rep->bestGet = delta;
+            if (delta < ctx->thr_summary.bestGet) {
+                ctx->thr_summary.bestGet = delta;
             }
-            if (delta > rep->worstGet) {
-                rep->worstGet = delta;
+            if (delta > ctx->thr_summary.worstGet) {
+                ctx->thr_summary.worstGet = delta;
             }
-            rep->getDelta += delta;
+            ctx->thr_summary.getDelta += delta;
             if (data != NULL) {
                 if (size != dataset[idx]) {
                     fprintf(stderr,
@@ -660,13 +639,13 @@ static int test(struct report *rep) {
                            memcmp(datablock.data, data, size) != 0) {
                     fprintf(stderr, "Garbled data for <%s>\n", key);
                 }
-                // record_tx(TX_GET, delta);
+                record_tx(TX_GET, delta, ctx);
                 free(data);
             } else {
                 fprintf(stderr, "missing data for <%s>\n", key);
                 // record_error(TX_GET, delta);
             }
-            ++rep->get;
+            ++ctx->thr_summary.get;
         }
         release_connection(connection);
     }
@@ -680,8 +659,8 @@ static int test(struct report *rep) {
  *            the result
  * @return arg
  */
-static void *test_thread_main(void* arg) {
-    test((struct report*) arg);
+void *test_thread_main(void* arg) {
+    test((struct thread_context*) arg);
     return arg;
 }
 
@@ -960,6 +939,7 @@ int main(int argc, char **argv) {
     size_t nset = populate ? no_items : 0;
     do {
         pthread_t *threads = calloc(sizeof (pthread_t), no_threads);
+        struct thread_context *ctx = calloc(sizeof (struct thread_context), no_threads);
         struct report *reports = calloc(sizeof (struct report), no_threads);
         int ii;
         size_t set = 0;
@@ -983,12 +963,13 @@ int main(int argc, char **argv) {
             int shift = 0;
 
             for (ii = 0; ii < no_threads; ++ii) {
-                reports[ii].total = perThread;
+                ctx->thr_summary.total = perThread;
+                ctx->head = NULL;
                 if (rest > 0) {
                     --rest;
-                    ++reports[ii].total;
+                    ++ctx->thr_summary.total;
                 }
-                pthread_create(&threads[ii], 0, test_thread_main, &reports[ii]);
+                pthread_create(&threads[ii], 0, test_thread_main, &ctx[ii]);
             }
 
             while (current < no_iterations) {
@@ -1094,8 +1075,9 @@ int main(int argc, char **argv) {
                 }
             }
         } else if (no_iterations > 0) {
+            /* TODO: make this per context
             reports[0].total = no_iterations;
-            test(&reports[0]);
+            test(&ctx[0]);
             set = reports[0].set;
             get = reports[0].get;
             setDelta = reports[0].setDelta;
@@ -1104,20 +1086,23 @@ int main(int argc, char **argv) {
             worstSet = reports[0].worstSet;
             bestGet = reports[0].bestGet;
             worstGet = reports[0].worstGet;
+            */
 
         }
 
-        // struct ResultMetrics *getResults = calc_metrics(TX_GET); // this does only gets at the moment need a smarter calc_metrics
+
+/*
+        struct ResultMetrics *getResults = calc_metrics(TX_GET); // this does only gets at the moment need a smarter calc_metrics
+*/
 
         /* print out the results */
 
-        /*
-          char tavg[80];
-          char tmin[80];
-          char tmax[80];
-          char tmax90[80];
-          char tmax95[80];
-
+/*
+        char tavg[80];
+        char tmin[80];
+        char tmax[80];
+        char tmax90[80];
+        char tmax95[80];
           printf("Get operations:\n");
           printf("     #of ops.       min       max        avg      max90th    max95th\n");
           printf("%13ld", getResults->success_count);
@@ -1159,6 +1144,7 @@ int main(int argc, char **argv) {
 
         free(reports);
         free(threads);
+*/
     } while (loop);
 
     if (getrusage(RUSAGE_SELF, &rusage) == -1) {
