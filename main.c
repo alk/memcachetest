@@ -972,21 +972,21 @@ int main(int argc, char **argv) {
                 pthread_create(&threads[ii], 0, test_thread_main, &ctx[ii]);
             }
 
-/*
+
             while (current < no_iterations) {
                 struct report temp = { .offset = 0 };
                 char buff[40];
                 sleep(5);
-                /* print average
+                /* print average */
 
 
                 for (ii = 0; ii < no_threads; ++ii) {
-                    struct report *rep = &reports[ii];
+                    struct ctx *rep = &ctx[ii];
 
-                    temp.set += rep->set;
-                    temp.get += rep->get;
-                    temp.setDelta += rep->setDelta;
-                    temp.getDelta += rep->getDelta;
+                    temp.set += ctx->thr_summary.set;
+                    temp.get += ctx->thr_summary.get;
+                    temp.setDelta += ctx->thr_summary.setDelta;
+                    temp.getDelta += ctx->thr_summary.getDelta;
                 }
 
                 if (progress) {
@@ -1010,7 +1010,7 @@ int main(int argc, char **argv) {
                 }
                 current = temp.set + temp.get;
             }
-*/
+
 
             if (progress) {
 /*
