@@ -486,7 +486,9 @@ static int populate_dataset(struct thread_context *ctx) {
     char key[12];
     size_t nkey;
 
+    assert(end > rep->offset);
     for (int ii = rep->offset; ii < end; ++ii) {
+        fprintf(stderr, "setting %s\n", key);
         nkey = snprintf(key, sizeof(key), "%d", ii);
         if (memcached_set_wrapper(connection, key, nkey,
                                   datablock.data, dataset[ii]) != 0) {
@@ -507,7 +509,7 @@ static int populate_dataset(struct thread_context *ctx) {
  * @return arg
  */
 static void *populate_thread_main(void* arg) {
-    if (populate_dataset((struct thread_context*) arg == 0) {
+    if (populate_dataset((struct thread_context*) arg) == 0) {
         return arg;
     } else {
         return NULL;
@@ -545,6 +547,7 @@ static int populate_data(int no_threads) {
                 ++ctx->thr_summary.total;
                 ++offset;
             }
+            assert(ctx->thr_summary.total != 0);
             pthread_create(&threads[ii], 0, populate_thread_main,
                     &ctx[ii]);
         }
@@ -558,7 +561,7 @@ static int populate_data(int no_threads) {
         }
         free(threads);
         free(ctx);
-    } else {
+    } else { /* only one thread */
         struct thread_context ctx = {.thr_summary.offset=0, .thr_summary.total=no_items};
 
         if (populate_dataset(&ctx) == -1) {
@@ -587,11 +590,6 @@ static int test(struct thread_context *ctx) {
     char key[12];
     size_t nkey;
     for (int ii = 0; ii < ctx->thr_summary.total; ++ii) {
-        connection = get_connection();
-
-        struct item item = get_setval();
-
-    for (size_t ii = 0; ii < rep->total; ++ii) {
         connection = get_connection();
         int idx = get_setval();
         nkey = snprintf(key, sizeof(key), "%d", idx);
@@ -1013,9 +1011,7 @@ int main(int argc, char **argv) {
 
 
             if (progress) {
-/*
-                fprintf(stdout, "\n");
-*/
+                fprintf(stdout, ".\n");
             }
 
 
@@ -1148,7 +1144,6 @@ int main(int argc, char **argv) {
 
         free(reports);
         free(threads);
-*/
     } while (loop);
 
     if (getrusage(RUSAGE_SELF, &rusage) == -1) {
