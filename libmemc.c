@@ -797,13 +797,10 @@ static int textual_get(struct Server* server, struct Item* item) {
             server_disconnect(server);
             return -1;
         }
-#ifndef __sun
-        typedef size_t ptrdiff_t;
-#endif
-        ptrdiff_t headsize = ptr - server->buffer;
-        size_t chunk = nread - headsize;
+        int headsize = ptr - server->buffer;
+        int chunk = nread - headsize;
 
-        if (chunk < (elemsize + 7)) {
+        if ((size_t)chunk < (elemsize + 7)) {
             // I don't have all of the data.. keep on reading
             server_receive(server, server->buffer + nread,
                            (elemsize - chunk) + 7, 0);
